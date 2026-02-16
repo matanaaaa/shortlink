@@ -65,6 +65,7 @@ func (s *Service) Resolve(ctx context.Context, code string) (string, error) {
 			if isNull {
 				return "", ErrNotFound
 			}
+			s.trackAccessAsync(code)
 			return v, nil
 		}
 	}
@@ -83,6 +84,7 @@ func (s *Service) Resolve(ctx context.Context, code string) (string, error) {
 				if isNull {
 					return "", ErrNotFound
 				}
+				s.trackAccessAsync(code)
 				return v, nil
 			}
 
@@ -98,6 +100,7 @@ func (s *Service) Resolve(ctx context.Context, code string) (string, error) {
 				return "", ErrNotFound
 			}
 			_ = s.Rds.SetURL(ctx, code, longURL, 24*time.Hour)
+			s.trackAccessAsync(code)
 			return longURL, nil
 		}
 
@@ -110,6 +113,7 @@ func (s *Service) Resolve(ctx context.Context, code string) (string, error) {
 				if isNull {
 					return "", ErrNotFound
 				}
+				s.trackAccessAsync(code)
 				return v, nil
 			}
 		}
@@ -130,7 +134,22 @@ func (s *Service) Resolve(ctx context.Context, code string) (string, error) {
 	if s.Rds != nil {
 		_ = s.Rds.SetURL(ctx, code, longURL, 24*time.Hour)
 	}
+	s.trackAccessAsync(code)
 	return longURL, nil
+}
+
+// best-effort async stats (does not block redirect path)
+func (s *Service) trackAccessAsync(code string) {
+	if s.Rds == nil {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+		defer cancel()
+
+		_ = s.Rds.IncrPV(ctx, code)
+		_ = s.Rds.SetLastAccessAt(ctx, code, time.Now().Unix(), 7*24*time.Hour)
+	}()
 }
 
 
@@ -155,3 +174,23 @@ func PingDB(db *sql.DB) error {
 	defer cancel()
 	return db.PingContext(ctx)
 }
+
+func (s *Service) GetMeta(ctx context.Context, code string) (pv int64, lastAccessAt int64, err error) {
+	code = strings.TrimSpace(code)
+	if code == "" || len(code) > 16 {
+		return 0, 0, ErrNotFound
+	}
+	if s.Rds == nil {
+		return 0, 0, nil
+	}
+	pv, err = s.Rds.GetPV(ctx, code)
+	if err != nil {
+		return 0, 0, err
+	}
+	lastAccessAt, err = s.Rds.GetLastAccessAt(ctx, code)
+	if err != nil {
+		return 0, 0, err
+	}
+	return pv, lastAccessAt, nil
+}
+

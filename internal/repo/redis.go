@@ -61,3 +61,33 @@ func (r *RedisRepo) SetNull(ctx context.Context, code string, ttl time.Duration)
 func (r *RedisRepo) Del(ctx context.Context, code string) error {
 	return r.RDB.Del(ctx, key(code)).Err()
 }
+
+func pvKey(code string) string { return "pv:code:" + code }
+func lastAccessKey(code string) string { return "last_access_at:code:" + code }
+
+// PV: INCR pv:code:{code}
+func (r *RedisRepo) IncrPV(ctx context.Context, code string) error {
+	return r.RDB.Incr(ctx, pvKey(code)).Err()
+}
+
+// last_access_at: SET last_access_at:code:{code} <unix_ts> with ttl
+func (r *RedisRepo) SetLastAccessAt(ctx context.Context, code string, unixTs int64, ttl time.Duration) error {
+	return r.RDB.Set(ctx, lastAccessKey(code), unixTs, ttl).Err()
+}
+
+// read meta
+func (r *RedisRepo) GetPV(ctx context.Context, code string) (int64, error) {
+	v, err := r.RDB.Get(ctx, pvKey(code)).Int64()
+	if err == redis.Nil {
+		return 0, nil
+	}
+	return v, err
+}
+
+func (r *RedisRepo) GetLastAccessAt(ctx context.Context, code string) (int64, error) {
+	v, err := r.RDB.Get(ctx, lastAccessKey(code)).Int64()
+	if err == redis.Nil {
+		return 0, nil
+	}
+	return v, err
+}

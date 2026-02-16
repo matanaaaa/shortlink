@@ -168,3 +168,19 @@ lock winner, hitting DB for code= uRfrwUhD
 ```
 
 appears once
+
+## Stats (PV + Last Access)
+
+Best-effort stats are stored in Redis and updated asynchronously (does not block redirect path):
+
+- `INCR pv:code:{code}`
+- `SET last_access_at:code:{code} <unix_ts>` (TTL 7d)
+
+Example:
+
+```text
+GET /meta/nrQLg4hG -> pv=3, last_access_at=1771230369
+redis GET pv:code:nrQLg4hG -> "3"
+redis GET last_access_at:code:nrQLg4hG -> "1771230369"
+
+```

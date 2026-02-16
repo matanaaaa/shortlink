@@ -18,6 +18,7 @@ type shortenReq struct {
 func (h *Handler) Register(r *gin.Engine) {
 	r.POST("/shorten", h.Shorten)
 	r.GET("/r/:code", h.Redirect)
+	r.GET("/meta/:code", h.Meta)
 }
 
 func (h *Handler) Shorten(c *gin.Context) {
@@ -47,3 +48,22 @@ func (h *Handler) Redirect(c *gin.Context) {
 	}
 	c.Redirect(http.StatusFound, longURL)
 }
+
+func (h *Handler) Meta(c *gin.Context) {
+	code := c.Param("code")
+	pv, last, err := h.Svc.GetMeta(c.Request.Context(), code)
+	if err == service.ErrNotFound {
+		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"code":           code,
+		"pv":             pv,
+		"last_access_at": last,
+	})
+}
+
