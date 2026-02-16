@@ -29,6 +29,27 @@ func (r *RedisRepo) Get(ctx context.Context, code string) (val string, hit bool,
 	return v, true, false, nil
 }
 
+func lockKey(code string) string { return "lock:code:" + code }
+
+// TryLock: SET key value NX EX ttl
+func (r *RedisRepo) TryLock(ctx context.Context, code, token string, ttl time.Duration) (bool, error) {
+	return r.RDB.SetNX(ctx, lockKey(code), token, ttl).Result()
+}
+
+// Unlock safely: only delete if value matches token (avoid deleting others' lock)
+var unlockLua = redis.NewScript(`
+if redis.call("GET", KEYS[1]) == ARGV[1] then
+  return redis.call("DEL", KEYS[1])
+else
+  return 0
+end
+`)
+
+func (r *RedisRepo) Unlock(ctx context.Context, code, token string) error {
+	_, err := unlockLua.Run(ctx, r.RDB, []string{lockKey(code)}, token).Result()
+	return err
+}
+
 func (r *RedisRepo) SetURL(ctx context.Context, code, longURL string, ttl time.Duration) error {
 	return r.RDB.Set(ctx, key(code), longURL, ttl).Err()
 }

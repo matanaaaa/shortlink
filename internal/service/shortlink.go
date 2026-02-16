@@ -7,6 +7,7 @@ import (
 	"errors"
 	"strings"
 	"time"
+	"log"
 
 	"shortlink/internal/repo"
 )
@@ -57,7 +58,7 @@ func (s *Service) Resolve(ctx context.Context, code string) (string, error) {
 		return "", ErrNotFound
 	}
 
-	// P1：Cache Aside + 空值缓存（穿透）
+	// 1) First check cache
 	if s.Rds != nil {
 		v, hit, isNull, err := s.Rds.Get(ctx, code)
 		if err == nil && hit {
@@ -68,6 +69,54 @@ func (s *Service) Resolve(ctx context.Context, code string) (string, error) {
 		}
 	}
 
+	// 2) Cache miss -> mutex lock to prevent breakdown
+	if s.Rds != nil {
+		token, _ := randomBase62(12) // reuse your random generator
+		locked, err := s.Rds.TryLock(ctx, code, token, 3*time.Second)
+		if err == nil && locked {
+			// We are the "single flight" winner
+			defer func() { _ = s.Rds.Unlock(ctx, code, token) }()
+
+			// 2.1 Double check cache again (maybe another request has filled it)
+			v, hit, isNull, err := s.Rds.Get(ctx, code)
+			if err == nil && hit {
+				if isNull {
+					return "", ErrNotFound
+				}
+				return v, nil
+			}
+
+			log.Println("lock winner, hitting DB for code=", code)
+
+			// 2.2 Query DB and fill cache
+			longURL, ok, err := s.My.GetLongURL(ctx, code)
+			if err != nil {
+				return "", err
+			}
+			if !ok {
+				_ = s.Rds.SetNull(ctx, code, 30*time.Second)
+				return "", ErrNotFound
+			}
+			_ = s.Rds.SetURL(ctx, code, longURL, 24*time.Hour)
+			return longURL, nil
+		}
+
+		// 3) Not locked -> wait a bit and retry cache (do NOT hit DB)
+		for i := 0; i < 5; i++ {
+			time.Sleep(30 * time.Millisecond)
+
+			v, hit, isNull, err := s.Rds.Get(ctx, code)
+			if err == nil && hit {
+				if isNull {
+					return "", ErrNotFound
+				}
+				return v, nil
+			}
+		}
+		// If still not in cache after retries, fall through to DB as last resort
+	}
+
+	// 4) Last resort: query DB
 	longURL, ok, err := s.My.GetLongURL(ctx, code)
 	if err != nil {
 		return "", err
@@ -78,12 +127,12 @@ func (s *Service) Resolve(ctx context.Context, code string) (string, error) {
 		}
 		return "", ErrNotFound
 	}
-
 	if s.Rds != nil {
 		_ = s.Rds.SetURL(ctx, code, longURL, 24*time.Hour)
 	}
 	return longURL, nil
 }
+
 
 // --- utils ---
 const base62 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
@@ -101,7 +150,6 @@ func randomBase62(n int) (string, error) {
 	return string(out), nil
 }
 
-// 可选：用于 main 里 ping db
 func PingDB(db *sql.DB) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
