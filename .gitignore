@@ -1,0 +1,19 @@
+# binaries
+server
+*.exe
+
+# env
+.env
+
+# go
+/bin/
+/dist/
+*.log
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
